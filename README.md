@@ -55,14 +55,15 @@ python3 bench.py
 
 # The Three Lines Between Slow and Fast in PyO3
 
-## The claim everyone repeats
+## The hypothesis
 
-"Rust/PyO3 extensions are slower than C extensions for fine-grained
-operations because PyO3's safety abstractions add overhead on every
-field access."
+There is a reasonable hypothesis that Rust/PyO3 extensions are slower
+than C extensions for fine-grained operations because PyO3's safety
+abstractions add overhead on every field access. Naive implementations
+appear to support this — and it is easy to stop there.
 
-I set out to measure this. The result was more interesting than the
-claim.
+I set out to measure it carefully. The result was more interesting than
+the hypothesis.
 
 ## The experiment
 
