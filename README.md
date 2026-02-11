@@ -81,6 +81,8 @@ Same workload, same machine, same Python interpreter.
 
 ### Environment
 
+All x86\_64 results were collected on:
+
 | Component | Version |
 |-----------|---------|
 | CPU | Intel Xeon Platinum 8339HC @ 1.80 GHz (L1d: 32 KiB/core) |
@@ -89,6 +91,17 @@ Same workload, same machine, same Python interpreter.
 | Rust | 1.91.0 (LLVM) |
 | Clang | 21.1.7 (LLVM) |
 | Platform | Linux x86\_64 |
+
+ARM results (see [Cross-architecture](#cross-architecture-arm-neoverse-v2))
+were collected on:
+
+| Component | Version |
+|-----------|---------|
+| CPU | NVIDIA Grace (Neoverse-V2) (L1d: 64 KiB/core) |
+| Python | 3.12.12+meta (CPython) |
+| GCC | 11.5.0 |
+| Rust | 1.93.0 (LLVM) |
+| Platform | Linux aarch64 |
 
 ## Round 1: the naive result
 
@@ -394,17 +407,58 @@ Rust (LLVM)                      2,560 ns
 
 The difference is not the compiler. It is the INCREF/DECREF.
 
+### Cross-architecture: ARM Neoverse-V2
+
+To test whether these results are architecture-specific, I ran the same
+benchmark on an NVIDIA Grace CPU (ARM Neoverse-V2, aarch64) with 64 KiB
+L1d cache per core — double the Intel machine's 32 KiB.
+
+```
+--- Native (loop + data in same language) ---
+Python loop, Python nodes        23,216 ns/traversal
+C loop, C nodes                   1,301 ns/traversal
+Rust loop, Rust nodes             1,803 ns/traversal
+```
+
+Controlled comparison (3 runs, stable to within 3 ns):
+
+```
+C (GC, 48 bytes/node)           1,312 ns  (1.3 ns/node)
+C (no GC, 32 bytes/node)        1,303 ns  (1.3 ns/node)
+Rust (no GC, 32 bytes/node)     1,812 ns  (1.8 ns/node)
+```
+
+Two predictions from the x86\_64 results are confirmed:
+
+1. **The GC-size cache effect disappeared.** On Intel (32 KiB L1d),
+   GC-tracked C was 55% slower than no-GC C (3.1 vs 2.0 ns/node).
+   On ARM (64 KiB L1d), they are identical (1.3 vs 1.3 ns/node). Both
+   the 47 KB and 31 KB lists fit in the larger L1. The paper's
+   "What would invalidate these results" section predicted this.
+
+2. **The INCREF/DECREF gap persists.** C is 1.39× faster than Rust
+   on ARM (vs 1.27× on Intel). The absolute gap is 0.5 ns/node (vs
+   0.6 ns/node on Intel). This cost is structural — it follows from
+   PyO3's ownership model, not from any architecture-specific behaviour.
+
+| | Intel x86\_64 | ARM aarch64 |
+|---|---|---|
+| C (no GC) | 2.0 ns/node | 1.3 ns/node |
+| Rust (frozen) | 2.6 ns/node | 1.8 ns/node |
+| C/Rust ratio | 1.27× | 1.39× |
+| GC-size effect | 55% slowdown | none |
+
 ## The full picture
 
-Stable results across 5 runs:
+Stable results across 5 runs (x86\_64) and 3 runs (aarch64):
 
-| Implementation | ns/node | What it does per node |
-|----------------|---------|----------------------|
-| C (no GC) | 2.0 | 2 loads, 1 add, 1 compare |
-| Rust (frozen) | 2.6 | 2 loads, 1 add, 1 compare, INCREF, DECREF |
-| C (with GC) | 3.1 | Same as C-no-GC but 48-byte objects (L1 miss) |
-| Rust (naive) | 22.8 | 2 loads, 1 add, 1 compare, isinstance, atomic CAS ×2, INCREF ×2, DECREF ×2 |
-| Python | 38.6 | LOAD\_ATTR specialisation, bytecode dispatch |
+| Implementation | ns/node (x86\_64) | ns/node (aarch64) | What it does per node |
+|----------------|-------------------|--------------------|-----------------------|
+| C (no GC) | 2.0 | 1.3 | 2 loads, 1 add, 1 compare |
+| Rust (frozen) | 2.6 | 1.8 | 2 loads, 1 add, 1 compare, INCREF, DECREF |
+| C (with GC) | 3.1 | 1.3 | Same as C-no-GC but 48-byte objects (L1 miss on x86\_64) |
+| Rust (naive) | 22.8 | — | 2 loads, 1 add, 1 compare, isinstance, atomic CAS ×2, INCREF ×2, DECREF ×2 |
+| Python | 38.6 | 23.2 | LOAD\_ATTR specialisation, bytecode dispatch |
 
 The naive Rust code was not 7× slower because of a fundamental
 architectural problem. It was 7× slower because every node access paid
@@ -446,12 +500,12 @@ is:
 
 3. **The irreducible floor is INCREF/DECREF.** With all safety overhead
    removed, the remaining cost is one reference count increment and one
-   decrement per object traversed — about 0.6 ns/node. This is PyO3's
-   ownership model: Rust does not have raw access to Python's reference
-   graph. Whether this matters depends on the workload. For most
-   applications, 0.6 ns/node is noise. For a tight interpreter loop
-   touching millions of objects per second, it is the difference between
-   C and Rust.
+   decrement per object traversed — 0.6 ns/node on x86\_64, 0.5 ns/node
+   on aarch64. This is PyO3's ownership model: Rust does not have raw
+   access to Python's reference graph. Whether this matters depends on
+   the workload. For most applications, 0.5–0.6 ns/node is noise. For a
+   tight interpreter loop touching millions of objects per second, it is
+   the difference between C and Rust.
 
 4. **Object size matters more than instruction count.** The GC-tracked
    C objects (48 bytes) were slower than Rust's non-GC objects (32 bytes)
@@ -489,8 +543,9 @@ faster — consistent with the INCREF/DECREF overhead prediction.
 
 ### What would invalidate these results
 
-- Running on hardware with larger L1 cache (>48 KB) would eliminate the
-  GC-size effect
+- ~~Running on hardware with larger L1 cache (>48 KB) would eliminate the
+  GC-size effect~~ — **confirmed**: on ARM Neoverse-V2 (64 KiB L1d),
+  GC and no-GC C performance is identical (1.3 ns/node both)
 - Free-threaded Python (`--disable-gil`) would make INCREF/DECREF atomic,
   increasing Rust's per-node cost
 - A list longer than ~8,000 nodes would overflow L1 for both
