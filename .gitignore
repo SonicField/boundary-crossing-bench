@@ -1,0 +1,42 @@
+# Compiled extensions
+*.so
+
+# Byte-compiled / optimised
+__pycache__/
+*.py[codz]
+
+# Rust build artifacts
+rust_node/target/
+
+# C build artifacts
+*.o
+*.obj
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Environments
+.env
+.venv
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Benchmark working files (not part of the experiment)
+*.backup
+*.bak
